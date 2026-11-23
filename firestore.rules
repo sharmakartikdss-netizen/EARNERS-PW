@@ -1,0 +1,62 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isAdmin() {
+      return signedIn() && request.auth.uid == "YO6LFNd9tkgaAmJK89AkmQhLxl92";
+    }
+    function hasActiveBatchAccess(batchId) {
+      let entPath = /databases/$(database)/documents/users/$(request.auth.uid)/entitlements/$(batchId);
+      let ent = get(entPath).data;
+      let keyPath = /databases/$(database)/documents/accessKeys/$(ent.keyHash);
+      let key = get(keyPath).data;
+      return signedIn()
+        && exists(entPath)
+        && ent.email == request.auth.token.email
+        && ent.batchId == batchId
+        && key.email == request.auth.token.email
+        && key.batchId == batchId
+        && key.active == true
+        && key.expiresAt > request.time;
+    }
+
+    match /batches/{batchId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
+      match /lectures/{lectureId} {
+        allow read: if isAdmin() || hasActiveBatchAccess(batchId);
+        allow create, update, delete: if isAdmin();
+      }
+    }
+
+    match /accessKeys/{keyHash} {
+      // A student can fetch only the single key document assigned to their own Google email.
+      allow get: if isAdmin() || (signedIn() && resource.data.email == request.auth.token.email);
+      allow list, create, update, delete: if isAdmin();
+    }
+
+    match /users/{uid} {
+      allow get: if isAdmin() || (signedIn() && request.auth.uid == uid);
+      allow list: if isAdmin();
+      allow create, update: if signedIn() && request.auth.uid == uid;
+      allow delete: if isAdmin();
+
+      match /entitlements/{batchId} {
+        allow get, list: if isAdmin() || (signedIn() && request.auth.uid == uid);
+        allow create, update: if signedIn()
+          && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['keyHash','studentName','studentNameLower','email','batchId','grantedAt'])
+          && request.resource.data.email == request.auth.token.email
+          && request.resource.data.batchId == batchId
+          && request.resource.data.studentNameLower is string
+          && exists(/databases/$(database)/documents/accessKeys/$(request.resource.data.keyHash))
+          && get(/databases/$(database)/documents/accessKeys/$(request.resource.data.keyHash)).data.email == request.auth.token.email
+          && get(/databases/$(database)/documents/accessKeys/$(request.resource.data.keyHash)).data.batchId == batchId
+          && get(/databases/$(database)/documents/accessKeys/$(request.resource.data.keyHash)).data.studentNameLower == request.resource.data.studentNameLower
+          && get(/databases/$(database)/documents/accessKeys/$(request.resource.data.keyHash)).data.active == true
+          && get(/databases/$(database)/documents/accessKeys/$(request.resource.data.keyHash)).data.expiresAt > request.time;
+        allow delete: if isAdmin();
+      }
+    }
+  }
+}
